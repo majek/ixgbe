@@ -67,10 +67,13 @@
  * It also defines DEV_NETMAP so further conditional sections use
  * that instead of CONFIG_NETMAP
  */
+
+// Fix from Pavel Odintsov, it's workaround for smartless configure script from netmap
+#define NETMAP_LINUX_IXGBE_DESC 3
+
 #include <ixgbe_netmap_linux.h>
 #endif
 
-char ixgbe_driver_name[] = "ixgbe";
 static const char ixgbe_driver_string[] =
 			      "Intel(R) 10 Gigabit PCI Express Network Driver";
 #define DRV_HW_PERF
@@ -679,20 +682,20 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 	unsigned int budget = q_vector->tx.work_limit;
 	unsigned int i = tx_ring->next_to_clean;
 
-#ifdef DEV_NETMAP
-	/*
-	 * In netmap mode, all the work is done in the context
-	 * of the client thread. Interrupt handlers only wake up
-	 * clients, which may be sleeping on individual rings
-	 * or on a global resource for all rings.
-	 */
-	
-	if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index))
-		return true; /* seems to be ignored */
-#endif /* DEV_NETMAP */
-
 	if (test_bit(__IXGBE_DOWN, &adapter->state))
 		return true;
+
+#ifdef DEV_NETMAP
+        /*    
+         * In netmap mode, all the work is done in the context
+         * of the client thread. Interrupt handlers only wake up
+         * clients, which may be sleeping on individual rings
+         * or on a global resource for all rings.
+         */
+      
+        if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index))
+                return 1; /* seems to be ignored */
+#endif /* DEV_NETMAP */
 
 	tx_buffer = &tx_ring->tx_buffer_info[i];
 	tx_desc = IXGBE_TX_DESC(tx_ring, i);
@@ -2233,6 +2236,15 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 #endif /* CONFIG_FCOE */
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
 
+#ifdef DEV_NETMAP
+        /*    
+         * Same as the txeof routine: only wakeup clients on intr.
+         */
+        int dummy;
+        if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
+                return true; 
+#endif /* DEV_NETMAP */
+
 	do {
 		union ixgbe_adv_rx_desc *rx_desc;
 		struct sk_buff *skb;
@@ -2357,7 +2369,7 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	 * Same as the txeof routine: only wakeup clients on intr.
 	 */
 	int dummy;
-	if (netmap_rx_irq(adapter->netdev, rx_ring->queue_index, &dummy))
+	if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
 		return true;
 #endif /* DEV_NETMAP */
 
@@ -8932,7 +8944,11 @@ static int ixgbe_set_features(struct net_device *netdev,
 #ifdef USE_CONST_DEV_UC_CHAR
 static int ixgbe_ndo_fdb_add(struct ndmsg *ndm, struct nlattr *tb[],
 			     struct net_device *dev,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 19, 0)
+			     const unsigned char *addr, u16 vid,
+#else
 			     const unsigned char *addr,
+#endif
 			     u16 flags)
 #else
 static int ixgbe_ndo_fdb_add(struct ndmsg *ndm,
@@ -8948,7 +8964,11 @@ static int ixgbe_ndo_fdb_add(struct ndmsg *ndm,
 	}
 
 #ifdef USE_CONST_DEV_UC_CHAR
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 19, 0)
+	return ndo_dflt_fdb_add(ndm, tb, dev, addr, vid, flags);
+#else
 	return ndo_dflt_fdb_add(ndm, tb, dev, addr, flags);
+#endif
 #else
 	return ndo_dflt_fdb_add(ndm, dev, addr, flags);
 #endif
@@ -9011,7 +9031,11 @@ static int ixgbe_ndo_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 
 	mode = adapter->bridge_mode;
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 19, 0)
+	return ndo_dflt_bridge_getlink(skb, pid, seq, dev, mode, 0, 0);
+#else
 	return ndo_dflt_bridge_getlink(skb, pid, seq, dev, mode);
+#endif
 }
 #endif /* HAVE_BRIDGE_ATTRIBS */
 #endif /* HAVE_FDB_OPS */
@@ -9800,10 +9824,6 @@ no_info_string:
 	e_info(probe, "Intel(R) 10 Gigabit Network Connection\n");
 	cards_found++;
 
-#ifdef DEV_NETMAP
-	ixgbe_netmap_attach(adapter);
-#endif /* DEV_NETMAP */
-
 #ifdef IXGBE_SYSFS
 	if (ixgbe_sysfs_init(adapter))
 		e_err(probe, "failed to allocate sysfs resources\n");
@@ -9823,6 +9843,11 @@ no_info_string:
 		hw->mac.ops.setup_link(hw,
 			IXGBE_LINK_SPEED_10GB_FULL | IXGBE_LINK_SPEED_1GB_FULL,
 			true);
+
+#ifdef DEV_NETMAP
+	// In modern patches this code located in the function end
+        ixgbe_netmap_attach(adapter);
+#endif /* DEV_NETMAP */
 
 	return 0;
 
@@ -9869,6 +9894,15 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
 		return;
 
 	netdev = adapter->netdev;
+
+#ifdef DEV_NETMAP
+        /* Ported patch from upstream netmap-next repository
+          https://github.com/luigirizzo/netmap/commit/b7aba79c54aa5ea0a7ec562b82170d8f2069d7de
+          for fixing this issue: https://github.com/luigirizzo/netmap/issues/54 
+        */
+        netmap_detach(netdev);
+#endif /* DEV_NETMAP */
+
 #ifdef HAVE_IXGBE_DEBUG_FS
 	ixgbe_dbg_adapter_exit(adapter);
 

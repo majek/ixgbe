@@ -1053,7 +1053,8 @@ void ixgbe_check_options(struct ixgbe_adapter *adapter);
 void ixgbe_assign_netdev_ops(struct net_device *netdev);
 
 /* needed by ixgbe_ethtool.c */
-extern char ixgbe_driver_name[];
+extern char netmap_ixgbe_driver_name[];
+#define ixgbe_driver_name netmap_ixgbe_driver_name
 extern const char ixgbe_driver_version[];
 
 void ixgbe_up(struct ixgbe_adapter *adapter);
