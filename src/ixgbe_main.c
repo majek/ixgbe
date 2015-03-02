@@ -53,6 +53,23 @@
 #include "ixgbe_dcb_82599.h"
 #include "ixgbe_sriov.h"
 
+#if defined(CONFIG_NETMAP) || defined(CONFIG_NETMAP_MODULE)
+/*
+ * The #ifdef DEV_NETMAP / #endif blocks in this file are meant to
+ * be a reference on how to implement netmap support in a driver.
+ * Additional comments are in ixgbe_netmap_linux.h .
+ *
+ * The code is originally developed on FreeBSD and in the interest
+ * of maintainability we try to limit differences between the two systems.
+ *
+ * <ixgbe_netmap_linux.h> contains functions for netmap support
+ * that extend the standard driver.
+ * It also defines DEV_NETMAP so further conditional sections use
+ * that instead of CONFIG_NETMAP
+ */
+#include <ixgbe_netmap_linux.h>
+#endif
+
 char ixgbe_driver_name[] = "ixgbe";
 static const char ixgbe_driver_string[] =
 			      "Intel(R) 10 Gigabit PCI Express Network Driver";
@@ -661,6 +678,18 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 	unsigned int total_bytes = 0, total_packets = 0;
 	unsigned int budget = q_vector->tx.work_limit;
 	unsigned int i = tx_ring->next_to_clean;
+
+#ifdef DEV_NETMAP
+	/*
+	 * In netmap mode, all the work is done in the context
+	 * of the client thread. Interrupt handlers only wake up
+	 * clients, which may be sleeping on individual rings
+	 * or on a global resource for all rings.
+	 */
+	
+	if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index))
+		return true; /* seems to be ignored */
+#endif /* DEV_NETMAP */
 
 	if (test_bit(__IXGBE_DOWN, &adapter->state))
 		return true;
@@ -2323,6 +2352,15 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	u16 len = 0;
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
 
+#ifdef DEV_NETMAP
+	/*
+	 * Same as the txeof routine: only wakeup clients on intr.
+	 */
+	int dummy;
+	if (netmap_rx_irq(adapter->netdev, rx_ring->queue_index, &dummy))
+		return true;
+#endif /* DEV_NETMAP */
+
 	do {
 		struct ixgbe_rx_buffer *rx_buffer;
 		union ixgbe_adv_rx_desc *rx_desc;
@@ -3440,6 +3478,10 @@ void ixgbe_configure_tx_ring(struct ixgbe_adapter *adapter,
 	} while (--wait_loop && !(txdctl & IXGBE_TXDCTL_ENABLE));
 	if (!wait_loop)
 		e_err(drv, "Could not enable Tx Queue %d\n", reg_idx);
+
+#ifdef DEV_NETMAP
+	ixgbe_netmap_configure_tx_ring(adapter, reg_idx);
+#endif /* DEV_NETMAP */
 }
 
 static void ixgbe_setup_mtqc(struct ixgbe_adapter *adapter)
@@ -3898,6 +3940,12 @@ void ixgbe_configure_rx_ring(struct ixgbe_adapter *adapter,
 	IXGBE_WRITE_REG(hw, IXGBE_RXDCTL(reg_idx), rxdctl);
 
 	ixgbe_rx_desc_queue_enable(adapter, ring);
+
+#ifdef DEV_NETMAP
+	if (ixgbe_netmap_configure_rx_ring(adapter, reg_idx))
+		return;
+#endif /* DEV_NETMAP */
+
 	ixgbe_alloc_rx_buffers(ring, ixgbe_desc_unused(ring));
 }
 
@@ -5604,6 +5652,10 @@ static void ixgbe_up_complete(struct ixgbe_adapter *adapter)
 	/* enable transmits */
 	netif_tx_start_all_queues(adapter->netdev);
 
+#ifdef DEV_NETMAP
+	netmap_enable_all_rings(adapter->netdev);
+#endif
+
 	/* bring the link up in the watchdog, this could race with our first
 	 * link up interrupt but shouldn't be a problem */
 	adapter->flags |= IXGBE_FLAG_NEED_LINK_UPDATE;
@@ -5876,6 +5928,10 @@ void ixgbe_down(struct ixgbe_adapter *adapter)
 	ixgbe_irq_disable(adapter);
 
 	ixgbe_napi_disable_all(adapter);
+
+#ifdef DEV_NETMAP
+	netmap_disable_all_rings(netdev);
+#endif
 
 	adapter->flags2 &= ~(IXGBE_FLAG2_FDIR_REQUIRES_REINIT |
 			     IXGBE_FLAG2_RESET_REQUESTED);
@@ -9743,6 +9799,10 @@ no_info_string:
 #endif /* (HAVE_NETDEV_STORAGE_ADDRESS) && (NETDEV_HW_ADDR_T_SAN) */
 	e_info(probe, "Intel(R) 10 Gigabit Network Connection\n");
 	cards_found++;
+
+#ifdef DEV_NETMAP
+	ixgbe_netmap_attach(adapter);
+#endif /* DEV_NETMAP */
 
 #ifdef IXGBE_SYSFS
 	if (ixgbe_sysfs_init(adapter))
