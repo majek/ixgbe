@@ -367,6 +367,7 @@ struct ixgbe_thermal_sensor_data {
 #define IXGBE_IMIREXT(_i)	(0x05AA0 + ((_i) * 4))  /* 8 of these (0-7) */
 #define IXGBE_IMIRVP		0x05AC0
 #define IXGBE_VMD_CTL		0x0581C
+#define IXGBE_RETA_SIZE		128
 #define IXGBE_RETA(_i)		(0x05C00 + ((_i) * 4))  /* 32 of these (0-31) */
 #define IXGBE_ERETA(_i)		(0x0EE80 + ((_i) * 4))  /* 96 of these (0-95) */
 #define IXGBE_RSSRK(_i)		(0x05C80 + ((_i) * 4))  /* 10 of these (0-9) */
