@@ -196,6 +196,35 @@ static const char ixgbe_gstrings_test[][ETH_GSTRING_LEN] = {
 #define IXGBE_TEST_LEN	(sizeof(ixgbe_gstrings_test) / ETH_GSTRING_LEN)
 #endif /* ETHTOOL_TEST */
 
+
+
+/* How rings are layed out when accessing virtual functions or
+ * offloaded queues is device specific. To allow users to do flow
+ * steering and specify these queues the ring cookie is partitioned
+ * into a 32bit queue index with an 8 bit virtual function id.
+ * This also leaves the 3bytes for further specifiers. It is possible
+ * future devices may support more than 256 virtual functions if
+ * devices start supporting PCIe w/ARI. However at the moment I
+ * do not know of any devices that support this so I do not reserve
+ * space for this at this time. If a future patch consumes the next
+ * byte it should be aware of this possiblity.
+ */
+#define ETHTOOL_RX_FLOW_SPEC_RING	0x00000000FFFFFFFFLL
+#define ETHTOOL_RX_FLOW_SPEC_RING_VF	0x000000FF00000000LL
+#define ETHTOOL_RX_FLOW_SPEC_RING_VF_OFF 32
+static inline __u64 ethtool_get_flow_spec_ring(__u64 ring_cookie)
+{
+	return ETHTOOL_RX_FLOW_SPEC_RING & ring_cookie;
+};
+
+static inline __u64 ethtool_get_flow_spec_ring_vf(__u64 ring_cookie)
+{
+	return (ETHTOOL_RX_FLOW_SPEC_RING_VF & ring_cookie) >>
+				ETHTOOL_RX_FLOW_SPEC_RING_VF_OFF;
+};
+
+
+
 int ixgbe_get_settings(struct net_device *netdev,
 		       struct ethtool_cmd *ecmd)
 {
@@ -3018,18 +3047,35 @@ static int ixgbe_add_ethtool_fdir_entry(struct ixgbe_adapter *adapter,
 	struct ixgbe_hw *hw = &adapter->hw;
 	struct ixgbe_fdir_filter *input;
 	union ixgbe_atr_input mask;
+	u8 queue;
 	int err;
 
 	if (!(adapter->flags & IXGBE_FLAG_FDIR_PERFECT_CAPABLE))
 		return -EOPNOTSUPP;
 
-	/*
-	 * Don't allow programming if the action is a queue greater than
-	 * the number of online Rx queues.
+	/* ring_cookie is a masked into a set of queues and ixgbe pools or
+	 * we use the drop index.
 	 */
-	if ((fsp->ring_cookie != RX_CLS_FLOW_DISC) &&
-	    (fsp->ring_cookie >= adapter->num_rx_queues))
-		return -EINVAL;
+	if (fsp->ring_cookie == RX_CLS_FLOW_DISC) {
+		queue = IXGBE_FDIR_DROP_QUEUE;
+	} else {
+		u32 ring = ethtool_get_flow_spec_ring(fsp->ring_cookie);
+		u8 vf = ethtool_get_flow_spec_ring_vf(fsp->ring_cookie);
+
+		if (!vf && (ring >= adapter->num_rx_queues))
+			return -EINVAL;
+		else if (vf &&
+			 ((vf > adapter->num_vfs) ||
+			   ring >= adapter->num_rx_queues_per_pool))
+			return -EINVAL;
+
+		/* Map the ring onto the absolute queue index */
+		if (!vf)
+			queue = adapter->rx_ring[ring]->reg_idx;
+		else
+			queue = ((vf - 1) *
+				adapter->num_rx_queues_per_pool) + ring;
+	}
 
 	/* Don't allow indexes to exist outside of available space */
 	if (fsp->location >= ((1024 << adapter->fdir_pballoc) - 2)) {
@@ -3111,10 +3157,11 @@ static int ixgbe_add_ethtool_fdir_entry(struct ixgbe_adapter *adapter,
 	 */
 	if (netif_running(adapter->netdev)) {
 		err = ixgbe_fdir_write_perfect_filter_82599(hw,
-					&input->filter, input->sw_idx,
-					(input->action == IXGBE_FDIR_DROP_QUEUE) ?
-					IXGBE_FDIR_DROP_QUEUE :
-					adapter->rx_ring[input->action]->reg_idx,
+					/* &input->filter, input->sw_idx, */
+					/* (input->action == IXGBE_FDIR_DROP_QUEUE) ? */
+					/* IXGBE_FDIR_DROP_QUEUE : */
+					/* adapter->rx_ring[input->action]->reg_idx, */
+					&input->filter, input->sw_idx, queue,
 					adapter->cloud_mode);
 		if (err)
 			goto err_out_w_lock;
