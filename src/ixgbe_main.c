@@ -686,15 +686,14 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 		return true;
 
 #ifdef DEV_NETMAP
-        /*    
+        /*
          * In netmap mode, all the work is done in the context
          * of the client thread. Interrupt handlers only wake up
          * clients, which may be sleeping on individual rings
          * or on a global resource for all rings.
          */
-      
-        if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index))
-                return 1; /* seems to be ignored */
+	if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index))
+		return true; /* seems to be ignored */
 #endif /* DEV_NETMAP */
 
 	tx_buffer = &tx_ring->tx_buffer_info[i];
@@ -2237,12 +2236,14 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
 
 #ifdef DEV_NETMAP
-        /*    
+        /*
          * Same as the txeof routine: only wakeup clients on intr.
          */
-        int dummy;
-        if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
-                return true; 
+        if (rx_ring->queue_index == 0) {
+		int dummy = 0;
+		if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
+			return true;
+	}
 #endif /* DEV_NETMAP */
 
 	do {
@@ -2368,9 +2369,11 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	/*
 	 * Same as the txeof routine: only wakeup clients on intr.
 	 */
-	int dummy;
-	if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
-		return true;
+        if (rx_ring->queue_index == 0) {
+		int dummy = 0;
+		if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
+			return true;
+	}
 #endif /* DEV_NETMAP */
 
 	do {
@@ -9896,10 +9899,6 @@ static void __devexit ixgbe_remove(struct pci_dev *pdev)
 	netdev = adapter->netdev;
 
 #ifdef DEV_NETMAP
-        /* Ported patch from upstream netmap-next repository
-          https://github.com/luigirizzo/netmap/commit/b7aba79c54aa5ea0a7ec562b82170d8f2069d7de
-          for fixing this issue: https://github.com/luigirizzo/netmap/issues/54 
-        */
         netmap_detach(netdev);
 #endif /* DEV_NETMAP */
 
