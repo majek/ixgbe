@@ -685,6 +685,7 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 	if (test_bit(__IXGBE_DOWN, &adapter->state))
 		return true;
 
+        if (tx_ring->queue_index == 0) {
 #ifdef DEV_NETMAP
         /*    
          * In netmap mode, all the work is done in the context
@@ -696,6 +697,7 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
         if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index))
                 return 1; /* seems to be ignored */
 #endif /* DEV_NETMAP */
+        }
 
 	tx_buffer = &tx_ring->tx_buffer_info[i];
 	tx_desc = IXGBE_TX_DESC(tx_ring, i);
@@ -2236,6 +2238,7 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 #endif /* CONFIG_FCOE */
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
 
+        if (rx_ring->queue_index == 0) {
 #ifdef DEV_NETMAP
         /*    
          * Same as the txeof routine: only wakeup clients on intr.
@@ -2244,6 +2247,7 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
         if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
                 return true; 
 #endif /* DEV_NETMAP */
+    }
 
 	do {
 		union ixgbe_adv_rx_desc *rx_desc;
@@ -2364,6 +2368,7 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	u16 len = 0;
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
 
+        if (rx_ring->queue_index == 0) {
 #ifdef DEV_NETMAP
 	/*
 	 * Same as the txeof routine: only wakeup clients on intr.
@@ -2372,6 +2377,7 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	if (netmap_rx_irq(rx_ring->netdev, rx_ring->queue_index, &dummy))
 		return true;
 #endif /* DEV_NETMAP */
+        }
 
 	do {
 		struct ixgbe_rx_buffer *rx_buffer;
@@ -3492,7 +3498,9 @@ void ixgbe_configure_tx_ring(struct ixgbe_adapter *adapter,
 		e_err(drv, "Could not enable Tx Queue %d\n", reg_idx);
 
 #ifdef DEV_NETMAP
-	ixgbe_netmap_configure_tx_ring(adapter, reg_idx);
+        if (reg_idx == 0) {
+	    ixgbe_netmap_configure_tx_ring(adapter, reg_idx);
+        }
 #endif /* DEV_NETMAP */
 }
 
@@ -3954,8 +3962,10 @@ void ixgbe_configure_rx_ring(struct ixgbe_adapter *adapter,
 	ixgbe_rx_desc_queue_enable(adapter, ring);
 
 #ifdef DEV_NETMAP
-	if (ixgbe_netmap_configure_rx_ring(adapter, reg_idx))
+        if (reg_idx == 0) {
+	    if (ixgbe_netmap_configure_rx_ring(adapter, reg_idx))
 		return;
+        }
 #endif /* DEV_NETMAP */
 
 	ixgbe_alloc_rx_buffers(ring, ixgbe_desc_unused(ring));
@@ -5665,6 +5675,15 @@ static void ixgbe_up_complete(struct ixgbe_adapter *adapter)
 	netif_tx_start_all_queues(adapter->netdev);
 
 #ifdef DEV_NETMAP
+
+#define WNA(_ifp)               (_ifp)->ax25_ptr
+#define NA(_ifp)        ((struct netmap_adapter *)WNA(_ifp))
+
+struct netmap_adapter *na = NA(adapter->netdev);
+
+na->num_tx_rings = 1;
+na->num_rx_rings = 1;
+
 	netmap_enable_all_rings(adapter->netdev);
 #endif
 
@@ -5942,6 +5961,15 @@ void ixgbe_down(struct ixgbe_adapter *adapter)
 	ixgbe_napi_disable_all(adapter);
 
 #ifdef DEV_NETMAP
+
+#define WNA(_ifp)               (_ifp)->ax25_ptr
+#define NA(_ifp)        ((struct netmap_adapter *)WNA(_ifp))
+
+struct netmap_adapter *na = NA(adapter->netdev);
+
+na->num_tx_rings = 1;
+na->num_rx_rings = 1;
+
 	netmap_disable_all_rings(netdev);
 #endif
 
