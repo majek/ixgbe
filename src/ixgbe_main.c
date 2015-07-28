@@ -685,19 +685,6 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 	if (test_bit(__IXGBE_DOWN, &adapter->state))
 		return true;
 
-#ifdef DEV_NETMAP
-        /*
-         * In netmap mode, all the work is done in the context
-         * of the client thread. Interrupt handlers only wake up
-         * clients, which may be sleeping on individual rings
-         * or on a global resource for all rings.
-         */
-        if (tx_ring->queue_index == 0) {
-		if (netmap_tx_irq(adapter->netdev, tx_ring->queue_index))
-			return 1; /* seems to be ignored */
-	}
-#endif /* DEV_NETMAP */
-
 	tx_buffer = &tx_ring->tx_buffer_info[i];
 	tx_desc = IXGBE_TX_DESC(tx_ring, i);
 	i -= tx_ring->count;
